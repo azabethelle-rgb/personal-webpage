@@ -1,0 +1,520 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Digital Portfolio - [Your Name]</title>
+    <!-- Load Tailwind CSS -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script>
+        tailwind.config = {
+            theme: {
+                extend: {
+                    colors: {
+                        'primary-dark': '#1e293b', 
+                        'secondary-accent': '#a87932',
+                        'light-bg': '#fefefe', 
+                        'subtle-gray': '#e5e7eb', 
+                    },
+                    fontFamily: {
+                        sans: ['Roboto', 'sans-serif'],
+                    }
+                }
+            }
+        }
+    </script>
+    <style>
+        
+        @import url('https://fonts.googleapis.com/css2?family=Roboto:wght@300;400;500;700;900&display=swap');
+        @keyframes subtleFadeIn {
+            from { opacity: 0; transform: translateY(10px); }
+            to { opacity: 1; transform: translateY(0); }
+        }
+        .animate-subtle-fade {
+            animation: subtleFadeIn 0.7s ease-out forwards;
+        }
+        .video-container {
+            position: relative;
+            width: 100%;
+            padding-bottom: 56.25%; /* 16:9 Aspect Ratio */
+            height: 0;
+            overflow: hidden;
+        }
+        .video-container iframe {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+        }
+    </style>
+    <script type="module">
+        import { initializeApp } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-app.js";
+        import { getAuth, signInAnonymously, signInWithCustomToken, onAuthStateChanged } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js";
+        import { getFirestore, doc, addDoc, onSnapshot, collection, query, serverTimestamp } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
+        import { setLogLevel } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
+        
+        setLogLevel('debug');
+
+        window.db = null;
+        window.auth = null;
+        window.userId = null;
+        window.appId = typeof __app_id !== 'undefined' ? __app_id : 'default-app-id';
+        const initFirebase = async () => {
+            try {
+                const firebaseConfig = JSON.parse(typeof __firebase_config !== 'undefined' ? __firebase_config : '{}');
+                if (Object.keys(firebaseConfig).length === 0) {
+                    console.error("Firebase config is missing.");
+                    return;
+                }
+                
+                const app = initializeApp(firebaseConfig);
+                window.db = getFirestore(app);
+                window.auth = getAuth(app);
+
+                const token = typeof __initial_auth_token !== 'undefined' ? __initial_auth_token : null;
+
+                onAuthStateChanged(window.auth, (user) => {
+                    if (user) {
+                        window.userId = user.uid;
+                        console.log("Firebase authenticated. User ID:", window.userId);
+                        loadComments();
+                        const userInfoEl = document.getElementById('user-info');
+                        if(userInfoEl) userInfoEl.textContent = 'User ID: ' + window.userId;
+                    } else {
+                        console.log("No user signed in.");
+                        if (!token) {
+                            signInAnonymously(window.auth).catch(error => console.error("Anonymous sign-in failed:", error));
+                        }
+                    }
+                });
+
+                if (token) {
+                    await signInWithCustomToken(window.auth, token);
+                } else {
+                    await signInAnonymously(window.auth);
+                }
+
+            } catch (error) {
+                console.error("Firebase initialization failed:", error);
+            }
+        };
+
+        const getCommentsCollectionRef = () => {
+            return collection(window.db, 'artifacts', window.appId, 'public', 'data', 'comments');
+        };
+
+        const saveComment = async (userName, userEmail, commentText) => {
+            if (!window.db || !window.userId) {
+                console.error("Database not initialized or user not authenticated.");
+                return false;
+            }
+
+            try {
+                await addDoc(getCommentsCollectionRef(), {
+                    userName: userName,
+                    userEmail: userEmail,
+                    commentText: commentText,
+                    userId: window.userId,
+                    timestamp: serverTimestamp(),
+                });
+                return true;
+            } catch (error) {
+                console.error("Error saving comment:", error);
+                const statusElement = document.getElementById('comment-status');
+                if(statusElement) {
+                    statusElement.textContent = 'Failed to submit comment.';
+                    statusElement.classList.add('text-red-500');
+                }
+                return false;
+            }
+        };
+        
+        window.saveComment = saveComment;
+
+        const loadComments = () => {
+            if (!window.db) {
+                console.error("Database not initialized.");
+                return;
+            }
+
+            const commentsList = document.getElementById('comments-list');
+            if(!commentsList) return;
+
+            const q = query(getCommentsCollectionRef());
+
+            onSnapshot(q, (snapshot) => {
+                let comments = [];
+                snapshot.forEach((doc) => {
+                    const data = doc.data();
+                    comments.push({ id: doc.id, ...data });
+                });
+                comments.sort((a, b) => {
+                    const timeA = a.timestamp && a.timestamp.toDate ? a.timestamp.toDate().getTime() : 0;
+                    const timeB = b.timestamp && b.timestamp.toDate ? b.timestamp.toDate().getTime() : 0;
+                    return timeB - timeA;
+                });
+
+                commentsList.innerHTML = '';
+                if (comments.length === 0) {
+                    commentsList.innerHTML = '<p class="text-gray-500 italic">No comments yet. Be the first to leave one!</p>';
+                    return;
+                }
+
+                comments.forEach(comment => {
+                    const date = comment.timestamp ? new Date(comment.timestamp.seconds * 1000).toLocaleString() : 'Just now';
+                    const commentElement = `
+                        <div class="p-4 bg-white border border-subtle-gray rounded-lg mb-4 shadow-sm hover:shadow-md transition duration-300">
+                            <p class="font-bold text-primary-dark">${comment.userName}</p>
+                            <p class="text-xs text-gray-500 mb-2">${date} &bull; ID: ${comment.userId.substring(0, 8)}...</p>
+                            <p class="mt-2 text-gray-700 leading-relaxed">${comment.commentText}</p>
+                        </div>
+                    `;
+                    commentsList.insertAdjacentHTML('beforeend', commentElement);
+                });
+            }, (error) => {
+                console.error("Error loading comments:", error);
+                commentsList.innerHTML = '<p class="text-red-500">Failed to load comments.</p>';
+            });
+        };
+
+        window.addEventListener('DOMContentLoaded', initFirebase);
+    </script>
+</head>
+<body class="bg-light-bg font-sans text-gray-800">
+    <div id="preloader" class="fixed inset-0 bg-primary-dark z-50 flex items-center justify-center transition-opacity duration-700 ease-in-out">
+        <div class="text-white text-3xl font-semibold tracking-wider relative">
+           B E L Y N D A &nbsp; P O R T F O L I O
+            <span id="progress-indicator" class="block h-1 bg-secondary-accent mt-2 transition-all duration-700 ease-out" style="width: 0%;"></span>
+        </div>
+    </div>
+    <div id="app-container" class="min-h-screen flex flex-col pt-16 opacity-0 transition-opacity duration-1000">
+        <nav class="fixed top-0 left-0 right-0 bg-white border-b border-subtle-gray z-30 shadow-sm">
+            <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
+                <div class="flex justify-between items-center h-16">
+                    <div class="flex-shrink-0">
+                    </div>
+                    <div class="hidden sm:ml-6 sm:flex sm:space-x-8">
+                        <a href="#home" class="nav-link text-gray-500 hover:text-secondary-accent px-1 py-2 text-sm font-medium transition duration-150 border-b-2 border-transparent" data-page="home">Home</a>
+                        <a href="#biodata" class="nav-link text-gray-500 hover:text-secondary-accent px-1 py-2 text-sm font-medium transition duration-150 border-b-2 border-transparent" data-page="biodata">Biodata</a>
+                        <a href="#portfolio" class="nav-link text-gray-500 hover:text-secondary-accent px-1 py-2 text-sm font-medium transition duration-150 border-b-2 border-transparent" data-page="portfolio">Portfolio</a>
+                        <a href="#video" class="nav-link text-gray-500 hover:text-secondary-accent px-1 py-2 text-sm font-medium transition duration-150 border-b-2 border-transparent" data-page="video">Video</a>
+                        <a href="#comments" class="nav-link text-gray-500 hover:text-secondary-accent px-1 py-2 text-sm font-medium transition duration-150 border-b-2 border-transparent" data-page="comments">Comments</a>
+                    </div>
+                </div>
+            </div>
+        </nav>
+
+        <main class="flex-grow p-4 sm:p-8 max-w-5xl mx-auto w-full">
+            <div id="content-container">
+
+                <!-- 1. HOMEPAGE -->
+                <section id="page-home" class="page-content space-y-10 p-8 bg-white rounded-lg shadow-xl border border-subtle-gray transition duration-500 animate-subtle-fade">
+                    <div class="text-center">
+                        <img src="../../Downloads/me.jpg" alt="Profile Picture Placeholder" class="mx-auto rounded-full w-32 h-32 object-cover border-4 border-secondary-accent shadow-lg grayscale hover:grayscale-0 transition duration-500">
+                        <h1 class="mt-6 text-5xl font-extrabold text-primary-dark leading-tight">
+                            Belynda A. William
+                        </h1>
+                        <p class="text-xl text-gray-500 mt-2">
+                            Multimedia Technology Student | Future Animator
+                        </p>
+                    </div>  
+                    <div class="pt-4">
+                        <h2 class="text-3xl font-bold text-primary-dark mb-4 border-l-4 border-secondary-accent pl-3">Introduction</h2>
+                        <p class="text-gray-700 leading-relaxed tracking-wide">
+                            Fueled by a passion for visual storytelling and motion design, I am a dedicated student specializing in 2D and 3D animation. This digital space serves as a vibrant showcase of my proficiency in industry-standard tools like After Effects, and Blender, and my commitment in designing characters and narratives. I am focused on continuous skill refinement and transforming creative concepts into engaging, visually compelling animated experiences.
+                        </p>
+                    </div>
+                </section>
+
+                <!-- 2. MY BIODATA -->
+                <section id="page-biodata" class="page-content hidden space-y-8 p-8 bg-white rounded-lg shadow-xl border border-subtle-gray transition duration-500">
+                    <h2 class="text-4xl font-bold text-primary-dark border-b pb-4 border-secondary-accent/50">My Biodata & Schedule</h2>
+                    
+                    <!-- Biodata Section -->
+                    <div class="grid md:grid-cols-2 gap-x-12 gap-y-4">
+                        <div>
+                            <p class="text-xs uppercase text-gray-500 tracking-widest">Full Name</p>
+                            <p class="text-lg font-semibold text-primary-dark">Belynda Azabeth William</p>
+                        </div>
+                        <div>
+                            <p class="text-xs uppercase text-gray-500 tracking-widest">Student ID</p>
+                            <p class="text-lg font-semibold text-primary-dark">BI23110243</p>
+                        </div>
+                        <div>
+                            <p class="text-xs uppercase text-gray-500 tracking-widest">Major</p>
+                            <p class="text-lg font-semibold text-primary-dark">Multimedia Technology</p>
+                        </div>
+                        <div>
+                            <p class="text-xs uppercase text-gray-500 tracking-widest">University</p>
+                            <p class="text-lg font-semibold text-primary-dark">University Malaysia Sabah Labuan International Campus</p>
+                        </div>
+                    </div>
+
+                    <!-- Timetable Section -->
+                    <h3 class="text-2xl font-bold text-primary-dark pt-4 border-t border-subtle-gray mt-4">Current Semester Timetable</h3>
+                     <div class="overflow-x-auto rounded-lg border border-subtle-gray shadow-md">
+                        <table class="min-w-full table-auto divide-y divide-subtle-gray text-sm">
+                            <thead class="bg-primary-dark text-white">
+                                <tr>
+                                    <th scope="col" class="px-3 py-2 text-left font-medium w-1/5">Day</th>
+                                    <th scope="col" class="px-3 py-2 text-left font-medium w-3/5">Course Name</th>
+                                    <th scope="col" class="px-3 py-2 text-left font-medium w-1/5">Time</th>
+                                </tr>
+                            </thead>
+                            <tbody class="divide-y divide-subtle-gray/70 bg-white">
+                                <!-- MONDAY -->
+                                <tr class="hover:bg-gray-50 transition duration-150">
+                                    <td class="px-3 py-2 font-semibold text-primary-dark align-top" rowspan="1">Monday</td>
+                                    <td class="px-3 py-2">IP02003 Artificial Intelligence</td>
+                                    <td class="px-3 py-2 font-mono text-gray-600">10:00 AM - 12:00 PM</td>
+                                </tr>
+
+                                <!-- TUESDAY -->
+                                <tr class="hover:bg-gray-50 transition duration-150">
+                                    <td class="px-3 py-2 font-semibold text-primary-dark align-top" rowspan="3">Tuesday</td>
+                                    <td class="px-3 py-2">IM32303 Computer Graphic</td>
+                                    <td class="px-3 py-2 font-mono text-gray-600">8:00 AM - 10:00 AM</td>
+                                </tr>
+                                <tr class="hover:bg-gray-50 transition duration-150">
+                                    <td class="px-3 py-2">IM32303 Computer Graphic (tutorial)</td>
+                                    <td class="px-3 py-2 font-mono text-gray-600">10:00 AM - 11:30 AM</td>
+                                </tr>
+                                <tr class="hover:bg-gray-50 transition duration-150">
+                                    <td class="px-3 py-2">IT32503 Cyber Security</td>
+                                    <td class="px-3 py-2 font-mono text-gray-600">2:00 PM - 4:00 PM</td>
+                                </tr>
+
+                                <!-- WEDNESDAY -->
+                                <tr class="hover:bg-gray-50 transition duration-150">
+                                    <td class="px-3 py-2 font-semibold text-primary-dark align-top" rowspan="1">Wednesday</td>
+                                    <td class="px-3 py-2">IT32603 Augmented Reality</td>
+                                    <td class="px-3 py-2 font-mono text-gray-600">8:00 AM - 10:00 AM</td>
+                                </tr>
+
+                                <!-- THURSDAY -->
+                                <tr class="hover:bg-gray-50 transition duration-150">
+                                    <td class="px-3 py-2 font-semibold text-primary-dark align-top" rowspan="2">Thursday</td>
+                                    <td class="px-3 py-2">IM22503 Multimedia Web Programming</td>
+                                    <td class="px-3 py-2 font-mono text-gray-600">9:00 AM - 12:00 PM</td>
+                                </tr>
+                                <tr class="hover:bg-gray-50 transition duration-150">
+                                    <td class="px-3 py-2">IT32603 Augmented Reality (tutorial)</td>
+                                    <td class="px-3 py-2 font-mono text-gray-600">2:00 PM - 4:00 PM</td>
+                                </tr>
+
+                                <!-- FRIDAY -->
+                                <tr class="bg-gray-50">
+                                    <td class="px-3 py-2 font-semibold text-primary-dark align-top" rowspan="1">Friday</td>
+                                    <td class="px-3 py-2 italic text-gray-500" colspan="2">No scheduled classes today. (Personal Project Focus)</td>
+                                </tr>
+                            </tbody>
+                        </table>
+                    </div>
+                </section>
+                <!-- 3. MY PORTFOLIO -->
+                <section id="page-portfolio" class="page-content hidden space-y-8 p-8 bg-white rounded-lg shadow-xl border border-subtle-gray transition duration-500">
+                    <h2 class="text-4xl font-bold text-primary-dark border-b pb-4 border-secondary-accent/50">Portfolio & Skills</h2>
+                    <div class="space-y-4">
+                        <h3 class="text-2xl font-bold text-primary-dark">Technical Proficiencies</h3>
+                        <div class="flex flex-wrap gap-4">
+                            <span class="bg-secondary-accent text-white px-4 py-1 rounded-full text-sm font-medium shadow-md">HTML/CSS</span>
+                            <span class="bg-primary-dark text-white px-4 py-1 rounded-full text-sm font-medium shadow-md">Blender</span>
+                            <span class="border border-secondary-accent text-primary-dark px-4 py-1 rounded-full text-sm font-medium">Adobe After Effect</span>
+                            <span class="border border-subtle-gray text-gray-700 px-4 py-1 rounded-full text-sm font-medium">CodeBlocks</span>
+                        </div>
+                    </div>
+                    <div class="grid md:grid-cols-2 gap-6 pt-3 border-t border-subtle-gray">
+                        <div class="order-2 md:order-1">
+                            <h3 class="text-2xl font-bold text-primary-dark mb-2">Project: Animated Biscuit Ad Campaign</h3>
+                            <p class="text-gray-700 mb-3 text-xs leading-relaxed">
+                                A short, professional advertising animation created to showcase product visualization skills. The project involved concept art, 3D modeling of the biscuit, character rigging, and final compositing to deliver a high-energy commercial.
+                            </p>
+                            <ul class="list-disc list-inside space-y-1 text-xs text-gray-600 pl-3">
+                                <li>Core Technologies: Blender and Adobe After Effects</li>
+                                <li>Key Feature: Demonstrated high-fidelity product rendering and fluid character animation.</li>
+                                <li>Status: Completed Short Film</li>
+                            </ul>
+                        </div>
+                        <div class="order-1 md:order-2 flex items-center justify-center h-full">
+                            <a href="REPORT ANIMATION GROUP.pdf" target="_blank" 
+                               class="w-full h-64 flex flex-col items-center justify-center bg-subtle-gray/50 rounded-md shadow-lg border-2 border-dashed border-secondary-accent text-primary-dark hover:bg-subtle-gray transition duration-300 p-4 text-center group">
+                                <svg xmlns="http://www.w3.org/2000/svg" width="36" height="36" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="mb-2 text-secondary-accent group-hover:scale-110 transition duration-300">
+                                    <path d="M14.5 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7.5L14.5 2z"></path>
+                                    <polyline points="14 2 14 8 20 8"></polyline>
+                                    <line x1="16" y1="13" x2="8" y2="13"></line>
+                                    <line x1="16" y1="17" x2="8" y2="17"></line>
+                                    <line x1="10" y1="9" x2="8" y2="9"></line>
+                                </svg>
+                                <p class="text-lg font-semibold">View Project PDF Report</p>
+                                <p class="text-xs text-gray-500 mt-1">Click to open detailed document in a new tab.</p>
+                            </a>
+                        </div>
+                    </div>
+                </section>
+
+                <!-- 4. MY VIDEO -->
+                <section id="page-video" class="page-content hidden space-y-8 p-8 bg-white rounded-lg shadow-xl border border-subtle-gray transition duration-500">
+                    <h2 class="text-4xl font-bold text-primary-dark border-b pb-4 border-secondary-accent/50">Group Animation Showcase</h2>
+                    <p class="text-gray-700">
+                        This video highlights the collaborative process and final output of our major group animation project, "A Bite of Joy." It demonstrates teamwork in character development, environment modeling, and rendering pipeline management.
+                    </p>
+                    <div class="video-container shadow-xl rounded-lg overflow-hidden border-2 border-primary-dark">
+                        <video width="1000" controls>
+							<source src="../../Downloads/A Bite of joy.mp4" type="video/mp4">
+						</video>
+                    </div>
+					<!-- Incase the video doesent play directly from the page -->
+                    <div class="text-center">
+                        <a id="video-link" href="https://youtu.be/ASBrgk9oipQ?si=zEHWefRBUOvWlFpg" target="_blank" class="inline-flex items-center justify-center px-4 py-2 border border-transparent text-sm font-medium rounded-md shadow-sm text-white bg-secondary-accent hover:bg-primary-dark transition duration-300">
+                            Watch on YouTube (Opens in New Tab)
+                            <svg xmlns="http://www.w3.org/2000/svg" class="ml-2 h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10 6H6a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2v-4M14 4h6m0 0v6m0-6L10 14" />
+                            </svg>
+                        </a>
+                    </div>
+                </section>
+                <!-- 5. YOUR COMMENTS -->
+                <section id="page-comments" class="page-content hidden space-y-8 p-8 bg-white rounded-lg shadow-xl border border-subtle-gray transition duration-500">
+                    <h2 class="text-4xl font-bold text-primary-dark border-b pb-4 border-secondary-accent/50">Your Comments & Feedback</h2>
+                    
+                    <p id="user-info" class="text-sm text-gray-500 border p-2 rounded-md bg-subtle-gray/50">User ID: Loading...</p>
+                    
+                    <div class="bg-light-bg p-6 rounded-lg border border-subtle-gray shadow-md">
+                        <h3 class="text-xl font-bold text-primary-dark mb-4">Leave a Comment</h3>
+                        <form id="comment-form" class="space-y-4">
+                            <div>
+                                <label for="comment-name" class="block text-sm font-medium text-gray-700">Name</label>
+                                <input type="text" id="comment-name" required class="mt-1 block w-full rounded-md border-gray-300 shadow-sm p-2 border focus:border-secondary-accent focus:ring-secondary-accent">
+                            </div>
+                            <div>
+                                <label for="comment-email" class="block text-sm font-medium text-gray-700">Email</label>
+                                <input type="email" id="comment-email" required class="mt-1 block w-full rounded-md border-gray-300 shadow-sm p-2 border focus:border-secondary-accent focus:ring-secondary-accent">
+                            </div>
+                            <div>
+                                <label for="comment-text" class="block text-sm font-medium text-gray-700">Comment</label>
+                                <textarea id="comment-text" rows="4" required class="mt-1 block w-full rounded-md border-gray-300 shadow-sm p-2 border focus:border-secondary-accent focus:ring-secondary-accent"></textarea>
+                            </div>
+                            <button type="submit" class="w-full bg-primary-dark text-white py-2 px-4 rounded-md font-semibold hover:bg-secondary-accent transition duration-200 shadow-lg">
+                                Post Comment
+                            </button>
+                            <p id="comment-status" class="text-center text-sm mt-2"></p>
+                        </form>
+                    </div>
+                    <h3 class="text-2xl font-bold text-primary-dark pt-6 border-t border-subtle-gray mt-6">Recent Feedback</h3>
+                    <div id="comments-list" class="space-y-4">
+                        <p class="text-gray-500 italic">Loading comments...</p>
+                    </div>
+
+                </section>
+
+            </div>
+        </main>
+
+        <!-- Footer -->
+        <footer class="bg-primary-dark text-white p-4 text-center text-sm mt-12">
+            <div class="max-w-7xl mx-auto">
+            </div>
+        </footer>
+
+    </div>
+
+    <script>
+        document.addEventListener('DOMContentLoaded', () => {
+            const container = document.getElementById('app-container');
+            const preloader = document.getElementById('preloader');
+            const progressIndicator = document.getElementById('progress-indicator');
+            
+           
+            const startAnimation = () => {
+                let width = 0;
+                const interval = setInterval(() => {
+                    width += 25; 
+                    progressIndicator.style.width = width + '%';
+                    if (width >= 100) {
+                        clearInterval(interval);
+                        
+                        
+                        preloader.style.opacity = '0';
+                        container.style.opacity = '1';
+
+                        setTimeout(() => {
+                            preloader.classList.add('hidden');
+                            handleRouting(); 
+                        }, 700); 
+                    }
+                }, 150);
+            };
+
+            startAnimation();
+
+
+           
+            const pageContents = document.querySelectorAll('.page-content');
+            const navLinks = document.querySelectorAll('.nav-link');
+
+            const showPage = (pageId) => {
+                
+                pageContents.forEach(page => {
+                    page.classList.add('hidden');
+                    page.classList.remove('animate-subtle-fade');
+                });
+                
+                
+                const targetPage = document.getElementById(`page-${pageId}`);
+                if (targetPage) {
+                    targetPage.classList.remove('hidden');
+                    setTimeout(() => targetPage.classList.add('animate-subtle-fade'), 10);
+                }
+                navLinks.forEach(link => {
+                    link.classList.remove('text-secondary-accent', 'border-secondary-accent');
+                    link.classList.add('text-gray-500', 'border-transparent');
+
+                    if (link.getAttribute('data-page') === pageId) {
+                        link.classList.add('text-secondary-accent', 'border-secondary-accent');
+                        link.classList.remove('text-gray-500');
+                    }
+                });
+            };
+
+            const handleRouting = () => {
+                const hash = window.location.hash.replace('#', '');
+                const pageId = hash || 'home'; 
+                showPage(pageId);
+            };
+
+            window.addEventListener('hashchange', handleRouting);
+            const commentForm = document.getElementById('comment-form');
+            commentForm.addEventListener('submit', async (e) => {
+                e.preventDefault();
+
+                const name = document.getElementById('comment-name').value.trim();
+                const email = document.getElementById('comment-email').value.trim();
+                const text = document.getElementById('comment-text').value.trim();
+                const statusElement = document.getElementById('comment-status');
+
+                if (name === "" || email === "" || text === "") {
+                    statusElement.textContent = 'All fields are required.';
+                    statusElement.className = 'text-center text-sm mt-2 text-red-500';
+                    return;
+                }
+                
+                statusElement.textContent = 'Submitting...';
+                statusElement.className = 'text-center text-sm mt-2 text-primary-dark';
+                
+                const success = await window.saveComment(name, email, text); 
+
+                if (success) {
+                    statusElement.textContent = 'Comment posted successfully!';
+                    statusElement.className = 'text-center text-sm mt-2 text-secondary-accent';
+                    commentForm.reset();
+                } else {
+                    statusElement.textContent = 'Failed to post comment. Check console for details.';
+                    statusElement.className = 'text-center text-sm mt-2 text-red-500';
+                }
+            });
+
+        });
+    </script>
+</body>
+</html>
